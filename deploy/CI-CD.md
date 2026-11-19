@@ -28,7 +28,19 @@ Generate an **Ed25519 deploy key pair** on your own trusted computer:
 ssh-keygen -t ed25519 -f ./roften-wave-cd -C roften-wave-cd
 ```
 
-Add the contents of `roften-wave-cd.pub` as one line in `/home/wave-deploy/.ssh/authorized_keys`, owned by `wave-deploy`, mode `600`. Only this PUBLIC key goes to the server. Put the matching **PRIVATE** key (the `roften-wave-cd` file, including BEGIN/END lines) into GitHub secret `DEPLOY_SSH_KEY`. Do not commit it or share it in chat.
+Add the contents of `roften-wave-cd.pub` as one line in `/home/wave-deploy/.ssh/authorized_keys`, owned by `wave-deploy`, mode `600`. Only this PUBLIC key goes to the server. Do not commit either key or share it in chat.
+
+**Recommended: Base64 GitHub secret (works reliably from Windows PowerShell).** On your own Windows computer, run:
+
+```powershell
+# Check that the file is a readable, unencrypted *private* key.
+ssh-keygen -y -P "" -f "$HOME\.ssh\roften-wave-cd" | Out-Null
+
+# Convert the entire ORIGINAL file byte-for-byte and copy a single Base64 line.
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("$HOME\.ssh\roften-wave-cd")) | Set-Clipboard
+```
+
+Paste the clipboard as the GitHub Actions secret **`DEPLOY_SSH_KEY_B64`**. Do not copy the `.pub` file, public key, key fingerprint or Base64 of the displayed text. The pipeline checks the decoded key before attempting SSH. The old multiline secret `DEPLOY_SSH_KEY` remains supported as a fallback, but you can remove it after setting the Base64 secret. If the key has a passphrase, create a separate automation key without a passphrase: the noninteractive workflow cannot answer a passphrase prompt.
 
 Verify server host fingerprint before trusting an SSH scan:
 
@@ -45,7 +57,7 @@ In GitHub repository **Settings → Secrets and variables → Actions**, configu
 
 | Type | Name | Value |
 | --- | --- | --- |
-| Secret | `DEPLOY_SSH_KEY` | Private Ed25519 key for CI |
+| Secret | `DEPLOY_SSH_KEY_B64` (preferred) | Base64-encoded private Ed25519 key file from PowerShell |\n| `DEPLOY_SSH_KEY` (legacy alternative) | Complete multiline private Ed25519 key |
 | Secret | `DEPLOY_SSH_KNOWN_HOSTS` | Verified host key line |
 | Variable | `DEPLOY_SSH_USER` | `wave-deploy` |
 | Variable (optional) | `DEPLOY_SSH_PORT` | `22` (default) |
