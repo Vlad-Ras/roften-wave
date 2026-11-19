@@ -68,13 +68,14 @@ jobs:
         id: config
         env:
           PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          PRIVATE_KEY_B64: ${{ secrets.DEPLOY_SSH_KEY_B64 }}
           PINNED_HOST_KEY: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
         shell: bash
         run: |
-          if [[ -z "$PRIVATE_KEY" || -z "$PINNED_HOST_KEY" || -z "$DEPLOY_USER" ]]; then
+          if [[ ( -z "$PRIVATE_KEY" && -z "$PRIVATE_KEY_B64" ) || -z "$PINNED_HOST_KEY" || -z "$DEPLOY_USER" ]]; then
             echo 'ready=false' >> "$GITHUB_OUTPUT"
             if [[ "${{ github.event_name }}" == 'workflow_dispatch' ]]; then
-              echo '::error::Set DEPLOY_SSH_KEY, DEPLOY_SSH_KNOWN_HOSTS and DEPLOY_SSH_USER before manual deployment.'
+              echo '::error::Set DEPLOY_SSH_KEY_B64 (preferred) or DEPLOY_SSH_KEY, DEPLOY_SSH_KNOWN_HOSTS and DEPLOY_SSH_USER.'
               exit 1
             fi
             echo '::notice::CD skipped: SSH secrets/variables are not yet configured. CI remains active.'
@@ -90,6 +91,7 @@ jobs:
         if: steps.config.outputs.ready == 'true'
         env:
           PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          PRIVATE_KEY_B64: ${{ secrets.DEPLOY_SSH_KEY_B64 }}
           PINNED_HOST_KEY: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
         shell: bash
         run: |
@@ -98,9 +100,22 @@ jobs:
           [[ "$COMMIT_SHA" =~ ^[a-f0-9]{40}$ ]]
           umask 077
           mkdir -p "$HOME/.ssh"
-          printf '%s\n' "$PRIVATE_KEY" > "$HOME/.ssh/roften_wave"
+          keyfile="$HOME/.ssh/roften_wave"
+          if [[ -n "$PRIVATE_KEY_B64" ]]; then
+            if ! printf '%s' "$PRIVATE_KEY_B64" | base64 --decode > "$keyfile" 2>/dev/null; then
+              echo '::error::DEPLOY_SSH_KEY_B64 is not valid Base64. Encode the complete private-key file without edits.'
+              exit 1
+            fi
+          else
+            # Legacy multiline secret: normalize Windows CRLF without revealing contents.
+            printf '%s\n' "$PRIVATE_KEY" | sed 's/\r$//' > "$keyfile"
+          fi
+          chmod 600 "$keyfile"
           printf '%s\n' "$PINNED_HOST_KEY" > "$HOME/.ssh/known_hosts"
-          ssh-keygen -y -f "$HOME/.ssh/roften_wave" >/dev/null
+          if ! ssh-keygen -y -P '' -f "$keyfile" >/dev/null 2>&1; then
+            echo '::error::SSH private key could not be read. Use DEPLOY_SSH_KEY_B64 with a complete, unencrypted private key (not the .pub file).'
+            exit 1
+          fi
           host_to_check="$DEPLOY_HOST"
           if [[ "$DEPLOY_PORT" != '22' ]]; then
             host_to_check="[$DEPLOY_HOST]:$DEPLOY_PORT"
