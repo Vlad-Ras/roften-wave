@@ -22,3 +22,8 @@ dist/
 .venv/
 .DS_Store
 *.log
+
+# Production deployment state and SQLite snapshots (server-local)
+.backups/
+.production-sha
+.production-sha.tmp
