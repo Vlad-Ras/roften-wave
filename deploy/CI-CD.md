@@ -1,75 +1,111 @@
-# Roften Wave: GitHub CI/CD
+# Roften Wave — single-environment production CI/CD
 
-Target server: **199.189.254.39**. Code path: `/opt/roften-wave`.
-AzuraCast is a separate service and is not managed by this pipeline.
+Repository: https://github.com/Vlad-Ras/roften-wave
+Production VPS: **199.189.254.39**
+Source checkout: **/opt/roften-wave**
+Compose project/service: **roften-wave / wave**
 
-## What happens
+There is **no staging**. Each **successful push to main** (not a PR) deploys
+the exact tested commit to the production server over pinned-key SSH.
+A manual **release** can also be started in GitHub Actions.
+No workflow uses \`docker compose down\` on the AzuraCast project.
 
-- Each push and pull request runs the existing `Tests` workflow (pytest on Python 3.11–3.13 and Docker build).
-- After a **successful push to main**, `CD - Roften Wave` performs **source sync only** over SSH. It never runs Docker in this mode.
-- `Actions → CD - Roften Wave → Run workflow → sync` manually synchronizes checked source.
-- `Actions → CD - Roften Wave → Run workflow → release` verifies the selected main commit again, then runs the Roften Wave Compose service and checks Docker health. **Do not choose release until you are ready to start the application.**
-- Missing SSH secrets cause automatic source sync to be skipped (with a notice); a manual invocation fails loudly.
+## Before enabling the first production release
 
-## One-time server setup (no application launch)
+The existing GitHub Actions SSH connection already uses:
 
-Create a dedicated unprivileged account with SSH login (example `wave-deploy`) and give it ownership of the deployment directory:
+- \`DEPLOY_SSH_KEY_B64\` (preferred) or legacy \`DEPLOY_SSH_KEY\` secret
+- \`DEPLOY_SSH_KNOWN_HOSTS\` secret, pinned and verified
+- \`DEPLOY_SSH_USER\` variable (\`wave-deploy\`)
+- Optional \`DEPLOY_SSH_PORT\` variable (default \`22\`)
 
-```bash
-sudo adduser --disabled-password --gecos "" wave-deploy
-sudo mkdir -p /opt/roften-wave
-sudo chown wave-deploy:wave-deploy /opt/roften-wave
-sudo install -d -m 700 -o wave-deploy -g wave-deploy /home/wave-deploy/.ssh
-```
+On the VPS, the \`wave-deploy\` user needs access to Docker. One straightforward
+option is adding the user to the Docker group. **Docker group membership is
+effectively root-equivalent**; use only a dedicated trusted account/key:
 
-Generate an **Ed25519 deploy key pair** on your own trusted computer:
+\`\`\`bash
+# Run as root on the VPS. New SSH sessions are required for group membership.
+usermod -aG docker wave-deploy
+su - wave-deploy -c 'docker info >/dev/null && docker compose version'
+\`\`\`
 
-```bash
-ssh-keygen -t ed25519 -f ./roften-wave-cd -C roften-wave-cd
-```
+Set the application's production secrets **on the VPS only**. Do not add
+them to the public GitHub repository:
 
-Add the contents of `roften-wave-cd.pub` as one line in `/home/wave-deploy/.ssh/authorized_keys`, owned by `wave-deploy`, mode `600`. Only this PUBLIC key goes to the server. Do not commit either key or share it in chat.
+\`\`\`bash
+su - wave-deploy
+cd /opt/roften-wave
+test -f .env || cp .env.example .env
+chmod 600 .env
+nano .env
+bash deploy/preflight.sh
+exit
+\`\`\`
 
-**Recommended: Base64 GitHub secret (works reliably from Windows PowerShell).** On your own Windows computer, run:
+Required: strong \`APP_ADMIN_PASSWORD\`, \`APP_SESSION_SECRET\` (at least
+32 random characters), \`YANDEX_MUSIC_TOKEN\`, DJ host/port/mount/username/password
+from the **Icecast DJ connection** in AzuraCast. Keep \`AUTO_START=true\`.
+\`TELEGRAM_BOT_TOKEN\` and \`TELEGRAM_ADMIN_IDS\` are optional but needed for
+Telegram control. An optional AzuraCast API key enables now-playing metadata.
 
-```powershell
-# Check that the file is a readable, unencrypted *private* key.
-ssh-keygen -y -P "" -f "$HOME\.ssh\roften-wave-cd" | Out-Null
+Verify the existing AzuraCast DJ port and mount before starting the app.
+The dashboard binds to **127.0.0.1:8787** only; configure existing nginx,
+DNS and HTTPS separately for the public domain. The CD job does not modify
+nginx, AzuraCast, its containers, or DNS.
 
-# Convert the entire ORIGINAL file byte-for-byte and copy a single Base64 line.
-[Convert]::ToBase64String([IO.File]::ReadAllBytes("$HOME\.ssh\roften-wave-cd")) | Set-Clipboard
-```
+## Automatic production release
 
-Paste the clipboard as the GitHub Actions secret **`DEPLOY_SSH_KEY_B64`**. Do not copy the `.pub` file, public key, key fingerprint or Base64 of the displayed text. The pipeline checks the decoded key before attempting SSH. The old multiline secret `DEPLOY_SSH_KEY` remains supported as a fallback, but you can remove it after setting the Base64 secret. If the key has a passphrase, create a separate automation key without a passphrase: the noninteractive workflow cannot answer a passphrase prompt.
+1. Push to \`main\`.
+2. Existing \`Tests\` workflow runs on Python 3.11, 3.12 and 3.13
+   (pytest, static checks, and Docker build). A failed CI **blocks deployment**.
+3. On green CI, \`CD - Roften Wave\` checks the event really originated from a
+   push to this repository's \`main\`. It checks out exactly that commit.
+4. The CD job uses strict host key verification and runs
+   \`bash deploy/remote-deploy.sh release <tested SHA>\` on the VPS.
+5. Server checks Docker access, clean Git history, the exact latest \`main\`
+   SHA, production \`.env\` values and Compose configuration.
+6. If an existing Roften Wave container is present, the script creates a
+   **consistent SQLite online snapshot** from the named volume using SQLite's
+   backup API (includes committed WAL state).
+7. Docker builds the candidate **without stopping the existing stream**,
+   tags it \`roften-wave:production\`, then recreates **only** the
+   \`wave\` service with \`--no-deps --no-build --force-recreate\`.
+8. Docker health must become \`healthy\` within 90 seconds. The successfully
+   released SHA is stored in the server-only \`.production-sha\` file.
+9. If changing the service fails, the script attempts to stop the new Wave,
+   restore the old SQLite snapshot, tag the old image, and restart the
+   previous Wave image. Failed rollback must be investigated manually.
 
-Verify server host fingerprint before trusting an SSH scan:
+A production release does **not** guarantee external Yandex OAuth, Icecast DJ
+authentication or Minecraft listener behavior; the Docker healthcheck tests
+HTTP liveness only. Test those links on the real infrastructure after the
+first release. Brief stream interruptions during container replacement are
+possible; AzuraCast's own AutoDJ should be configured as backup.
 
-```bash
-# On the actual VPS:
-sudo ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
-# On your trusted computer:
-ssh-keyscan -t ed25519 199.189.254.39
-```
+The release refuses to start if SSH, Docker permissions, \`.env\` or the
+backup are missing/invalid; **it does not install dependencies or fabricate
+credentials automatically**. A failed attempt does not mean the app is live.
 
-Check that the public key from ssh-keyscan has the same fingerprint as the VPS's host key. Store the FULL `199.189.254.39 ssh-ed25519 AAAA...` line in GitHub secret `DEPLOY_SSH_KNOWN_HOSTS`. On non-default SSH ports, use the SSH known_hosts syntax `[199.189.254.39]:PORT ssh-ed25519 AAAA...`.
+## Manual production release
 
-In GitHub repository **Settings → Secrets and variables → Actions**, configure:
+GitHub → Actions → **CD - Roften Wave** → **Run workflow** → \`main\` → \`release\`.
 
-| Type | Name | Value |
-| --- | --- | --- |
-| Secret | `DEPLOY_SSH_KEY_B64` (preferred) | Base64-encoded private Ed25519 key file from PowerShell |\n| `DEPLOY_SSH_KEY` (legacy alternative) | Complete multiline private Ed25519 key |
-| Secret | `DEPLOY_SSH_KNOWN_HOSTS` | Verified host key line |
-| Variable | `DEPLOY_SSH_USER` | `wave-deploy` |
-| Variable (optional) | `DEPLOY_SSH_PORT` | `22` (default) |
+Manual releases run the same production script and checks. A CI failure does
+not permit an automatic production release. Do not downgrade from a newer
+checked-out commit; deploy the latest main commit instead.
 
-Once these are set, the next successful push to main syncs the files into `/opt/roften-wave`. The script refuses to overwrite an unrelated directory, refuses dirty tracked files and refuses to move to a diverged or older Git history.
+## Verification on the VPS
 
-**No Docker permissions are needed for code sync.** Later, for manual `release`, the deploy account needs carefully controlled permission to invoke Docker Compose; membership in the `docker` group effectively grants root-equivalent access. Avoid enabling this until you are ready and have reviewed the host's access controls.
+\`\`\`bash
+cd /opt/roften-wave
+git rev-parse --short HEAD
+cat .production-sha                # present only after successful release
+docker compose -p roften-wave ps
+docker compose -p roften-wave logs --tail=100 wave
+curl -fsS http://127.0.0.1:8787/health
+\`\`\`
 
-## Release prerequisites (not needed for source sync)
-
-On the server prepare `/opt/roften-wave/.env` from `.env.example` and set its permissions to `600`. Fill in admin password/session secret, Yandex token, DJ credentials and optionally Telegram bot credentials **on the server only**. Confirm that port 8787 is unused, that FFmpeg DJ settings match your AzuraCast station, and that the existing AzuraCast AutoDJ works. Run `bash deploy/preflight.sh` locally before invoking `release`.
-
-The CD script uses **`docker compose -p roften-wave up -d --build --no-deps wave`** on explicit release only. The project name is fixed, so its SQLite named volume does not change between releases. It does not edit Nginx, DNS, SSL or AzuraCast configuration. Health checks confirm the Wave container started; this does not prove that real Yandex streaming or DJ authentication works. There is no automated rollback in this initial CD pipeline.
-
-If the VDS has already been cloned or configured locally, leave `.env` untracked. Do not manually edit tracked source files on the server; CD deliberately refuses to overwrite such changes.
+Backups of the Wave SQLite state are stored in
+\`/opt/roften-wave/.backups/\`. They are untracked and excluded from Docker
+build context. Keep adequate disk space and rotate them manually according
+to your retention policy. Do not use \`docker compose down -v\` on Wave.
