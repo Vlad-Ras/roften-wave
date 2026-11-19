@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0d1425"><title>Roften Wave — Radio Control</title>
+<link rel="stylesheet" href="/app.css">
+</head><body>
+<div class="glow glow-a"></div><div class="glow glow-b"></div>
+<div id="login-view" class="auth-wrap hidden">
+  <form id="login-form" class="auth-card">
+    <div class="brand-icon">≋</div><div class="eyebrow">ВЛАДЕЙ СВОИМ ЭФИРОМ</div>
+    <h1>Roften <em>Wave</em></h1><p>Панель управления твоим радио</p>
+    <label for="username">Логин</label><input id="username" autocomplete="username" required value="admin">
+    <label for="password">Пароль</label><input id="password" autocomplete="current-password" type="password" required>
+    <button class="primary" type="submit">Войти в эфир <span>→</span></button><div id="login-error" class="error"></div>
+  </form>
+</div>
+<div id="app-view" class="layout hidden">
+  <aside class="sidebar">
+    <a class="logo" href="/" aria-label="Roften Wave"><div class="logo-glyph">≋</div><div>ROFTEN <span>WAVE</span><small>RADIO CONTROL</small></div></a>
+    <div class="side-head">УПРАВЛЕНИЕ</div>
+    <button class="nav active" data-tab="player"><span>◉</span> Эфир</button>
+    <button class="nav" data-tab="catalog"><span>⌕</span> Поиск и плейлисты</button>
+    <button class="nav" data-tab="settings"><span>⚙</span> Настройки</button>
+    <div class="sidebar-bottom"><div class="live-indicator"><i></i> ROFTEN RADIO</div><div class="footnote">Roften Wave 0.1.3</div><button id="logout" class="text-btn">Выйти ↗</button></div>
+  </aside>
+  <main class="main">
+    <header class="top"><div><span class="eyebrow">ПЕРСОНАЛЬНАЯ РАДИОСТАНЦИЯ</span><h1 id="page-title">Пульт эфира</h1></div><div class="top-right"><span id="state-indicator" class="status-pill">Проверяем соединение</span><div class="avatar">RW</div></div></header>
+    <div id="toast" class="toast hidden" role="status"></div>
+    <section class="tab" id="tab-player">
+      <div class="player-grid">
+        <div class="now-card">
+          <div class="card-heading"><span>СЕЙЧАС В ЭФИРЕ</span><span id="live-chip" class="live-chip">● ОЖИДАНИЕ</span></div>
+          <div class="album" id="album-art"><span>♫</span></div>
+          <h2 id="track-title">Эфир свободен</h2><p class="artist" id="track-artist">Добавь трек или включи «Мою волну»</p>
+          <div class="progress"><div id="progress" class="progress-bar"></div></div><div class="time-row"><span id="elapsed">0:00</span><span id="duration">0:00</span></div>
+          <div class="controls"><button id="prev" class="round" title="Предыдущий">⏮</button><button id="toggle" class="round main-control" title="Пауза/продолжить">▶</button><button id="next" class="round" title="Следующий">⏭</button></div>
+          <div class="divider"></div><div class="control-row"><label for="mode">РЕЖИМ ВОСПРОИЗВЕДЕНИЯ</label><select id="mode"><option value="manual">Ручная очередь</option><option value="wave">🌊 Моя волна</option><option value="likes">♥ Мне нравится</option></select></div>
+        </div>
+        <div class="queue-card"><div class="section-heading"><div><span class="eyebrow">СЛЕДУЮЩИЕ КОМПОЗИЦИИ</span><h2>Очередь</h2></div><span class="counter" id="queue-count">0</span></div><div id="queue-list" class="queue-list"><p class="muted">Очередь пуста</p></div><div class="queue-foot">Треки можно поднимать и опускать кнопками ↑ и ↓. Ручные запросы играют первыми.</div></div>
+      </div>
+      <div class="details"><div class="info-card"><div class="mini-icon">↝</div><div><div class="eyebrow">РЕЖИМ</div><strong id="mode-status">Ручной</strong></div></div><div class="info-card"><div class="mini-icon">◈</div><div><div class="eyebrow">ЯНДЕКС МУЗЫКА</div><strong id="ym-status">Проверка</strong></div></div><div class="info-card"><div class="mini-icon">◉</div><div><div class="eyebrow">AZURACAST</div><strong id="az-status">Проверка</strong></div></div></div>
+      <div class="queue-foot" role="status">Предзагрузка следующего трека: <strong id="prefetch-status">Ожидание</strong> · Метаданные AzuraCast: <strong id="metadata-status">Выключены</strong></div>
+      <div class="queue-foot" role="status">Восстановление после ошибок: <strong id="recovery-status">Нет ошибок</strong></div>
+      <p class="warning" id="playback-error"></p>
+    </section>
+    <section class="tab hidden" id="tab-catalog"><div class="subhead"><h2>Найти музыку</h2><p>Выбирай треки, добавляй их в эфир или ставь в очередь.</p></div><form id="search-form" class="search-form"><input id="search-query" placeholder="Название трека или исполнитель…" minlength="2" maxlength="150" required><button class="primary" type="submit">⌕ Поиск</button></form><div id="search-results" class="results"><div class="empty">Введи название песни для поиска в Яндекс Музыке</div></div><div class="section-heading playlists-title"><div><span class="eyebrow">МОЯ МУЗЫКА</span><h2>Плейлисты</h2></div><button class="subtle" id="load-playlists">↻ Обновить</button></div><div id="playlist-results" class="results"><div class="empty">Нажми «Обновить», чтобы загрузить плейлисты</div></div></section>
+    <section class="tab hidden" id="tab-settings"><div class="subhead"><h2>Подключения</h2><p>Смена публичных адресов не требует пересборки контейнера.</p></div><div class="settings-card"><form id="settings-form"><label for="app-url">Адрес панели управления</label><input id="app-url" type="url" required placeholder="https://wave.roften.ru"><small>После изменения DNS и HTTPS настрой внешний Nginx.</small><label for="radio-url">Публичный адрес радиопотока</label><input id="radio-url" type="url" required placeholder="https://roften.ru/listen/radio/radio.mp3"><small>Для Minecraft лучше сохранить прежний URL или настроить перенаправление.</small><button class="primary" type="submit">Сохранить адреса</button></form></div><div class="settings-card"><div class="section-heading"><div><span class="eyebrow">ВНУТРЕННЕЕ ПОДКЛЮЧЕНИЕ</span><h2>AzuraCast Live DJ</h2></div></div><div id="dj-summary" class="mono-box">Не настроено</div><p id="metadata-summary" class="muted">Отдельный API-ключ для синхронизации названий песен не настроен.</p><p class="muted">DJ-хост, порт, логин и пароль меняются в <code>.env</code> с последующим перезапуском сервиса. Они не публикуются в браузере.</p></div><div class="settings-card"><div class="section-heading"><div><span class="eyebrow">ПЕРЕД ЗАПУСКОМ</span><h2>Диагностика подключений</h2></div></div><p class="muted">Проверяет авторизацию Яндекса, доступность DJ-порта и системные зависимости. Не запускает вещание и не меняет AzuraCast.</p><button class="subtle" type="button" id="check-connections">Проверить подключения</button><div id="diagnostics-output" class="diagnostics-list" role="status"></div></div>
+    <div class="settings-card"><div class="section-heading"><div><span class="eyebrow">УПРАВЛЕНИЕ</span><h2>Telegram-бот</h2></div></div><p id="telegram-summary" class="muted">Проверяем настройки…</p><p class="muted">Токен Telegram и разрешённые user ID задаются в <code>.env</code>; бот не использует webhook и не зависит от домена.</p></div></section>
+  </main>
+</div>
+<script src="/app.js" defer></script>
+</body></html>

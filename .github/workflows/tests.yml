@@ -1,0 +1,36 @@
+name: Tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Python dependencies
+        run: python -m pip install -e '.[test]'
+      - name: Unit and local integration tests
+        run: python -m pytest -q
+      - name: Compile
+        run: python -m compileall -q roften_wave
+      - name: Static JavaScript and Bash checks
+        run: |
+          node --check roften_wave/static/app.js
+          bash -n deploy/preflight.sh deploy/render-domain.sh deploy/publish-github.sh
+      - name: Check no real secrets / temporary data are committed
+        run: |
+          test ! -f .env
+          test ! -d data || test -z "$(find data -type f -name '*.sqlite*' -print -quit)"
+          test -z "$(git ls-files '*.mp3' '*.sqlite*' '.env')"
+      - name: Docker build
+        if: matrix.python-version == '3.12'
+        run: docker build -t roften-wave:ci .

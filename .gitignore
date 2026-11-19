@@ -1,0 +1,24 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+.pytest_cache/
+*.pyc
+*.db
+*.sqlite*
+data/
+*.mp3
+*.aac
+*.flac
+# Packaging and developer build output
+build/
+dist/
+*.egg-info/
+.coverage
+*.whl
+*.zip
+*.bundle
+
+.venv/
+.DS_Store
+*.log
