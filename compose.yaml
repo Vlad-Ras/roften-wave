@@ -11,6 +11,11 @@ services:
       - "127.0.0.1:8787:8787"
     volumes:
       - wave_data:/data
+    # Keep Wave's own network and also reach AzuraCast's private DJ port.
+    # This does not publish port 8005 or alter the AzuraCast service.
+    networks:
+      - default
+      - azuracast
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -23,3 +28,7 @@ services:
     cap_drop: [ALL]
 volumes:
   wave_data:
+networks:
+  azuracast:
+    external: true
+    name: azuracast_default
