@@ -6,26 +6,17 @@ on:
     types: [completed]
     branches: [main]
   workflow_dispatch:
-    inputs:
-      mode:
-        description: "sync: copy code only; release: build and start Roften Wave"
-        type: choice
-        required: true
-        default: sync
-        options:
-          - sync
-          - release
 
 permissions:
   contents: read
 
 concurrency:
-  group: roften-wave-cd
+  group: roften-wave-production
   cancel-in-progress: false
 
 jobs:
   verify_release:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'release' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -37,7 +28,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg
           python -m pip install -e '.[test]'
-      - name: Test source selected for release
+      - name: Verify manually released source before production
         run: |
           python -m pytest -q
           python -m compileall -q roften_wave
@@ -62,7 +53,7 @@ jobs:
       DEPLOY_USER: ${{ vars.DEPLOY_SSH_USER }}
       DEPLOY_PORT: ${{ vars.DEPLOY_SSH_PORT || '22' }}
       COMMIT_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
-      DEPLOY_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'sync' }}
+      DEPLOY_MODE: release
     steps:
       - name: Check SSH configuration
         id: config
@@ -74,11 +65,8 @@ jobs:
         run: |
           if [[ ( -z "$PRIVATE_KEY" && -z "$PRIVATE_KEY_B64" ) || -z "$PINNED_HOST_KEY" || -z "$DEPLOY_USER" ]]; then
             echo 'ready=false' >> "$GITHUB_OUTPUT"
-            if [[ "${{ github.event_name }}" == 'workflow_dispatch' ]]; then
-              echo '::error::Set DEPLOY_SSH_KEY_B64 (preferred) or DEPLOY_SSH_KEY, DEPLOY_SSH_KNOWN_HOSTS and DEPLOY_SSH_USER.'
-              exit 1
-            fi
-            echo '::notice::CD skipped: SSH secrets/variables are not yet configured. CI remains active.'
+            echo '::error::Production SSH configuration missing. Set DEPLOY_SSH_KEY_B64 (or DEPLOY_SSH_KEY), DEPLOY_SSH_KNOWN_HOSTS and DEPLOY_SSH_USER.'
+            exit 1
           else
             echo 'ready=true' >> "$GITHUB_OUTPUT"
           fi
@@ -133,7 +121,7 @@ jobs:
             echo "::error::DEPLOY_SSH_KNOWN_HOSTS has no host key for $host_to_check. Use the COMPLETE verified known_hosts line, e.g. $host_to_check ssh-ed25519 AAAA... (not a fingerprint or the server private key)."
             exit 1
           fi
-      - name: Sync sources / manually release
+      - name: Release Roften Wave on production VPS
         if: steps.config.outputs.ready == 'true'
         shell: bash
         run: |
