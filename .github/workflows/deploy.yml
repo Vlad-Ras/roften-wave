@@ -1,0 +1,120 @@
+name: CD - Roften Wave
+
+on:
+  workflow_run:
+    workflows: ["Tests"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "sync: copy code only; release: build and start Roften Wave"
+        type: choice
+        required: true
+        default: sync
+        options:
+          - sync
+          - release
+
+permissions:
+  contents: read
+
+concurrency:
+  group: roften-wave-cd
+  cancel-in-progress: false
+
+jobs:
+  verify_release:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'release' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install FFmpeg and dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install -e '.[test]'
+      - name: Test source selected for release
+        run: |
+          python -m pytest -q
+          python -m compileall -q roften_wave
+          docker build -t roften-wave:release-check .
+
+  deploy:
+    needs: [verify_release]
+    if: >-
+      always() &&
+      (needs.verify_release.result == 'skipped' || needs.verify_release.result == 'success') &&
+      (
+        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+        (github.event_name == 'workflow_run' &&
+         github.event.workflow_run.conclusion == 'success' &&
+         github.event.workflow_run.event == 'push' &&
+         github.event.workflow_run.head_repository.full_name == github.repository &&
+         github.event.workflow_run.head_branch == 'main')
+      )
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_HOST: 199.189.254.39
+      DEPLOY_USER: ${{ vars.DEPLOY_SSH_USER }}
+      DEPLOY_PORT: ${{ vars.DEPLOY_SSH_PORT || '22' }}
+      COMMIT_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      DEPLOY_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'sync' }}
+    steps:
+      - name: Check SSH configuration
+        id: config
+        env:
+          PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          PINNED_HOST_KEY: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          if [[ -z "$PRIVATE_KEY" || -z "$PINNED_HOST_KEY" || -z "$DEPLOY_USER" ]]; then
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            if [[ "${{ github.event_name }}" == 'workflow_dispatch' ]]; then
+              echo '::error::Set DEPLOY_SSH_KEY, DEPLOY_SSH_KNOWN_HOSTS and DEPLOY_SSH_USER before manual deployment.'
+              exit 1
+            fi
+            echo '::notice::CD skipped: SSH secrets/variables are not yet configured. CI remains active.'
+          else
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.config.outputs.ready == 'true'
+        with:
+          ref: ${{ env.COMMIT_SHA }}
+          persist-credentials: false
+      - name: Install pinned SSH identity
+        if: steps.config.outputs.ready == 'true'
+        env:
+          PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          PINNED_HOST_KEY: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          [[ "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]] && (( DEPLOY_PORT >= 1 && DEPLOY_PORT <= 65535 ))
+          [[ "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          [[ "$COMMIT_SHA" =~ ^[a-f0-9]{40}$ ]]
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$PRIVATE_KEY" > "$HOME/.ssh/roften_wave"
+          printf '%s\n' "$PINNED_HOST_KEY" > "$HOME/.ssh/known_hosts"
+          ssh-keygen -y -f "$HOME/.ssh/roften_wave" >/dev/null
+          host_to_check="$DEPLOY_HOST"
+          if [[ "$DEPLOY_PORT" != '22' ]]; then
+            host_to_check="[$DEPLOY_HOST]:$DEPLOY_PORT"
+          fi
+          ssh-keygen -F "$host_to_check" -f "$HOME/.ssh/known_hosts" >/dev/null
+      - name: Sync sources / manually release
+        if: steps.config.outputs.ready == 'true'
+        shell: bash
+        run: |
+          ssh -i "$HOME/.ssh/roften_wave" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o BatchMode=yes \
+            -o ConnectTimeout=12 \
+            -p "$DEPLOY_PORT" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "bash -s -- $DEPLOY_MODE $COMMIT_SHA" < deploy/remote-deploy.sh
