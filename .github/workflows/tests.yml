@@ -10,8 +10,12 @@ jobs:
       matrix:
         python-version: ['3.11', '3.12', '3.13']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - name: Check no secrets, local databases or audio were committed
+        run: |
+          test ! -f .env
+          test -z "$(git ls-files -- '*.mp3' '*.sqlite*' '.env')"
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
       - name: FFmpeg
@@ -25,12 +29,7 @@ jobs:
       - name: Static JavaScript and Bash checks
         run: |
           node --check roften_wave/static/app.js
-          bash -n deploy/preflight.sh deploy/render-domain.sh deploy/publish-github.sh
-      - name: Check no real secrets / temporary data are committed
-        run: |
-          test ! -f .env
-          test ! -d data || test -z "$(find data -type f -name '*.sqlite*' -print -quit)"
-          test -z "$(git ls-files '*.mp3' '*.sqlite*' '.env')"
+          bash -n deploy/preflight.sh deploy/render-domain.sh deploy/publish-github.sh deploy/remote-deploy.sh
       - name: Docker build
         if: matrix.python-version == '3.12'
         run: docker build -t roften-wave:ci .
