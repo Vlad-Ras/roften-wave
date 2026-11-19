@@ -12,11 +12,11 @@ WORKDIR /opt/roften-wave
 # Docker layer whenever only application code or static assets change.
 # The list is read from pyproject.toml itself: no duplicate dependency list.
 COPY pyproject.toml ./
-RUN python -c 'import subprocess, sys, tomllib; from pathlib import Path; config = tomllib.loads(Path("pyproject.toml").read_text()); deps = config["project"]["dependencies"]; subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-cache-dir", *deps])'
+RUN python -c 'import subprocess, sys, tomllib; from pathlib import Path; config = tomllib.loads(Path("pyproject.toml").read_text()); deps = config["project"]["dependencies"]; build = config["build-system"]["requires"]; subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-cache-dir", *deps, *build])'
 
 COPY roften_wave ./roften_wave
 # Install only the tiny local application package; dependencies already exist.
-RUN python -m pip install --no-cache-dir --no-deps .
+RUN python -m pip install --no-cache-dir --no-build-isolation --no-deps .
 
 RUN useradd -r -u 10001 -m wave && mkdir /data && chown wave:wave /data
 USER wave
