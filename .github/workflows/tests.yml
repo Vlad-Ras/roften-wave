@@ -18,8 +18,14 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
       - name: FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
       - name: Python dependencies
         run: python -m pip install -e '.[test]'
       - name: Unit and local integration tests
@@ -30,6 +36,15 @@ jobs:
         run: |
           node --check roften_wave/static/app.js
           bash -n deploy/preflight.sh deploy/render-domain.sh deploy/publish-github.sh deploy/remote-deploy.sh
-      - name: Docker build
+      - name: Set up Docker Buildx
         if: matrix.python-version == '3.12'
-        run: docker build -t roften-wave:ci .
+        uses: docker/setup-buildx-action@v3
+      - name: Docker build (shared BuildKit cache)
+        if: matrix.python-version == '3.12'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: roften-wave:ci
+          cache-from: type=gha,scope=roften-wave-ci
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,scope=roften-wave-ci,mode=max' || '' }}
