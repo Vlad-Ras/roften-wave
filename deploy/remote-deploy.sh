@@ -32,7 +32,7 @@ rollback() {
   if [[ "$switched_image" == 1 ]]; then
     docker compose -p "$project" stop wave >&2
     if [[ -n "$snapshot_file" && -s "$snapshot_file" && -n "$previous_image" ]]; then
-      docker run --rm --network none --security-opt no-new-privileges \
+      docker run --rm --network none --user 0:0 --security-opt no-new-privileges \
         --mount "type=volume,source=$volume,target=/data" \
         --mount "type=bind,source=$target/.backups,target=/backups,readonly" \
         --mount "type=bind,source=$target/deploy,target=/scripts,readonly" \
@@ -128,7 +128,10 @@ if [[ -n "$previous_image" ]]; then
   docker volume inspect "$volume" >/dev/null || die "Existing Wave service lacks expected SQLite volume"
   snapshot_file="$target/.backups/wave_$(date -u +%Y%m%dT%H%M%SZ)_$short_sha.sqlite3"
   echo "Backing up the online SQLite database before restart"
-  docker run --rm --network none --security-opt no-new-privileges \
+  # This is a one-off offline helper, not the Wave service. Run it as root
+  # inside the isolated container so it can traverse 0700 host backup folders
+  # and read the SQLite volume owned by UID 10001. Wave stays unprivileged.
+  docker run --rm --network none --user 0:0 --security-opt no-new-privileges \
     --mount "type=volume,source=$volume,target=/data,readonly" \
     --mount "type=bind,source=$target/.backups,target=/backups" \
     --mount "type=bind,source=$target/deploy,target=/scripts,readonly" \
