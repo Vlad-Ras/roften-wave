@@ -33,6 +33,13 @@ def snapshot(mode: str, source: Path, destination: Path, uid: int, gid: int) -> 
         if os.geteuid() == 0:
             os.chown(tmp, uid, gid)
         os.replace(tmp, destination)
+        if mode == "restore":
+            # Called only after the application has stopped. Never replay stale WAL
+            # or shared-memory files from the database that we just replaced.
+            for suffix in ("-wal", "-shm"):
+                stale = Path(str(destination) + suffix)
+                if stale.exists():
+                    stale.unlink()
     finally:
         if tmp.exists():
             tmp.unlink()
