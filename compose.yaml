@@ -1,6 +1,7 @@
 services:
   wave:
     build: .
+    image: roften-wave:production
     container_name: roften-wave
     restart: unless-stopped
     env_file: .env
