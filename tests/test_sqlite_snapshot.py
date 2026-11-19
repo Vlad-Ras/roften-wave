@@ -32,11 +32,12 @@ def test_backup_includes_uncheckpointed_wal_and_restore_is_consistent(tmp_path):
         connection.commit()
 
     run_script("restore", backup, database)
+    # The restored database must have no WAL from the previous incarnation.
+    assert not Path(str(database) + "-wal").exists()
+    assert not Path(str(database) + "-shm").exists()
     with sqlite3.connect(database) as restored:
         rows = restored.execute("SELECT track FROM queue ORDER BY id").fetchall()
     assert rows == [("expected",)]
-    assert not Path(str(database) + "-wal").exists()
-    assert not Path(str(database) + "-shm").exists()
 
 
 def test_invalid_source_cannot_replace_destination(tmp_path):
