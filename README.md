@@ -79,16 +79,13 @@ The app is accessible *only* on the host's loopback address `127.0.0.1:8787`. Co
 3. Run `bash deploy/preflight.sh`, then `docker compose up -d --build` and inspect logs.
 4. Open **Settings → Проверить подключения**; use Telegram `/diagnose` if the bot is configured.
 
-## GitHub publication (not deployment)
+## GitHub Actions CI/CD
 
-The source ZIP is a clean export without Git history; the separately supplied `.bundle` includes a verified local `main` commit and tag `v0.1.3`. **A GitHub-hosted repository has not been created from ChatGPT**, because the connected GitHub integration can write to existing repos but does not expose repository creation. To publish under your own authenticated account once GitHub CLI (`gh`) is available, from the project directory run:
+Source code: https://github.com/Vlad-Ras/roften-wave
 
-```bash
-gh auth login
-bash deploy/publish-github.sh
-```
+The `Tests` workflow automatically runs Python 3.11–3.13 tests and a Docker build on push/PR. After a successful push to `main`, the `CD - Roften Wave` workflow attempts a **source-only SSH sync** to `199.189.254.39:/opt/roften-wave`. This sync **never starts or restarts containers**. It is skipped with a notice until SSH secrets and the deploy user are configured. The `workflow_dispatch` action also supports manual `sync` and explicit manual `release`; do not select `release` before production configuration is ready.
 
-The script creates a local Git commit if you started from the source ZIP, creates a **private** `Vlad-Ras/roften-wave` GitHub repo if missing, and pushes `main` (or pushes to the existing repo). It does not run deployments or change AzuraCast; review the files and ensure that `.env` is excluded before publishing. To preserve the supplied Git commit instead of creating a new one, clone the separate bundle first: `git clone roften-wave-0.1.3.bundle roften-wave`.
+**SSH setup, pinned host key, GitHub secrets/variables, server permissions, and first deploy steps:** [deploy/CI-CD.md](deploy/CI-CD.md). Do not store production `.env`, OAuth tokens or SSH keys in the repository. This project has **not** been deployed to the VDS.
 
 ## Future work
 
@@ -107,4 +104,4 @@ An actual end-to-end check needs real credentials and a reachable DJ port: find 
 
 ## Development status (0.1.3)
 
-This is an **offline build, not deployed** to the existing VDS or GitHub, and AzuraCast has not been modified. Run synthetic tests locally with `python -m pytest -q`; the suite tests cache reuse, rapid candidate replacement and deletion of stale files, recovery, auth/CSRF, FFmpeg audio delivery to a fake Icecast endpoint, and HTTP metadata formatting. Real Yandex OAuth/account behavior and AzuraCast's installed API have not been tested.
+This source release is **published to GitHub, but not deployed** to the VDS, and AzuraCast has not been modified. Run synthetic tests locally with `python -m pytest -q`; the suite tests cache reuse, rapid candidate replacement and deletion of stale files, recovery, auth/CSRF, FFmpeg audio delivery to a fake Icecast endpoint, and HTTP metadata formatting. Real Yandex OAuth/account behavior and AzuraCast's installed API have not been tested.
