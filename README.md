@@ -79,13 +79,22 @@ The app is accessible *only* on the host's loopback address `127.0.0.1:8787`. Co
 3. Run `bash deploy/preflight.sh`, then `docker compose up -d --build` and inspect logs.
 4. Open **Settings → Проверить подключения**; use Telegram `/diagnose` if the bot is configured.
 
-## GitHub Actions CI/CD
+## Production deployment (GitHub Actions CI/CD)
 
-Source code: https://github.com/Vlad-Ras/roften-wave
+This project uses **one production environment** on VPS `199.189.254.39` — no staging.
+After a successful `Tests` workflow on a push to `main`, GitHub Actions attempts
+to build and release the exact tested commit over SSH. The server-side script
+checks the production `.env` and Docker access before modifying containers,
+takes a consistent SQLite snapshot for upgrades, and attempts an automatic
+rollback of the Wave container if its Docker healthcheck fails.
+AzuraCast is managed separately; the pipeline updates **only** the Wave service.
 
-The `Tests` workflow automatically runs Python 3.11–3.13 tests and a Docker build on push/PR. After a successful push to `main`, the `CD - Roften Wave` workflow attempts a **source-only SSH sync** to `199.189.254.39:/opt/roften-wave`. This sync **never starts or restarts containers**. It is skipped with a notice until SSH secrets and the deploy user are configured. The `workflow_dispatch` action also supports manual `sync` and explicit manual `release`; do not select `release` before production configuration is ready.
+**First-time VPS setup, SSH permissions, production secrets, health checks,
+and rollback details:** [deploy/CI-CD.md](deploy/CI-CD.md).
 
-**SSH setup, pinned host key, GitHub secrets/variables, server permissions, and first deploy steps:** [deploy/CI-CD.md](deploy/CI-CD.md). Do not store production `.env`, OAuth tokens or SSH keys in the repository. This project has **not** been deployed to the VDS.
+A green CI or source sync does not prove the radio is running:
+check the CD workflow and production container. Real Yandex / AzuraCast DJ
+authentication and the Minecraft stream require a separate live check.
 
 ## Future work
 
@@ -104,4 +113,4 @@ An actual end-to-end check needs real credentials and a reachable DJ port: find 
 
 ## Development status (0.1.3)
 
-This source release is **published to GitHub, but not deployed** to the VDS, and AzuraCast has not been modified. Run synthetic tests locally with `python -m pytest -q`; the suite tests cache reuse, rapid candidate replacement and deletion of stale files, recovery, auth/CSRF, FFmpeg audio delivery to a fake Icecast endpoint, and HTTP metadata formatting. Real Yandex OAuth/account behavior and AzuraCast's installed API have not been tested.
+This source release is published to GitHub and is managed by the production CD workflow. Deployment succeeds only after VPS credentials and Docker permissions are configured; verify actual status in Actions and on the VDS. AzuraCast is not changed by CD. Run synthetic tests locally with `python -m pytest -q`; the suite tests cache reuse, rapid candidate replacement and deletion of stale files, recovery, auth/CSRF, FFmpeg audio delivery to a fake Icecast endpoint, and HTTP metadata formatting. Real Yandex OAuth/account behavior and AzuraCast's installed API have not been tested.
