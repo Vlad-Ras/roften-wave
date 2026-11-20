@@ -115,6 +115,7 @@ async def launch_bot(config: Config, source: YandexSource, store: Store, player:
             "/manual — ручная очередь\n"
             "/air — реальный эфир и слушатели AzuraCast\n"
             "/history — последние 10 песен\n"
+            "/playlists — добавить свой плейлист в очередь\n"
             "/now — обложка, прогресс и длительность\n"
             "/shuffle — перемешать очередь · /dedupe — убрать повторы\n"
             "/stats — статистика аудио\n"
@@ -248,6 +249,50 @@ async def launch_bot(config: Config, source: YandexSource, store: Store, player:
         text = (message.text or "").split()[0].lstrip("/").split("@")[0]
         player.set_mode({"wave": "wave", "likes": "likes", "manual": "manual"}[text])
         await message.answer(f"Режим: {text}")
+
+    @router.message(Command("playlists"))
+    async def playlists_cmd(message: Message):
+        try:
+            playlists = await asyncio.to_thread(source.playlists)
+        except Exception as exc:
+            log.warning("Cannot list playlists: %s", type(exc).__name__)
+            await message.answer("Не удалось получить плейлисты Яндекс Музыки")
+            return
+        valid = [item for item in playlists if str(item.get("kind", "")).isdigit()
+                 and (not item.get("owner") or str(item["owner"]).isdigit())]
+        if not valid:
+            await message.answer("Собственные плейлисты не найдены")
+            return
+        await message.answer("🎼 Твои плейлисты — выбери для добавления в очередь:")
+        for item in valid[:12]:
+            kind, owner = str(item["kind"]), str(item.get("owner") or "")
+            callback_data = f"playlist:{kind}:{owner}"
+            if len(callback_data.encode("utf-8")) > 64:
+                continue
+            button = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="➕ Добавить в очередь", callback_data=callback_data)
+            ]])
+            title = str(item.get("title", "Плейлист"))[:120]
+            await message.answer(f"🎼 {title} · {item.get('count', 0)} треков",
+                                 reply_markup=button)
+
+    @router.callback_query(F.data.startswith("playlist:"))
+    async def playlist_pick(callback: CallbackQuery):
+        parts = (callback.data or "").split(":", 2)
+        if len(parts) != 3 or not parts[1].isdigit() or (parts[2] and not parts[2].isdigit()):
+            await callback.answer("Некорректный плейлист", show_alert=True)
+            return
+        try:
+            tracks = await asyncio.to_thread(source.playlist_tracks, parts[1], parts[2])
+            count = store.add_many(tracks)
+            player.queue_updated()
+        except Exception as exc:
+            log.warning("Cannot import playlist: %s", type(exc).__name__)
+            await callback.answer("Не удалось импортировать плейлист", show_alert=True)
+            return
+        await callback.answer(f"Добавлено: {count}")
+        if callback.message:
+            await callback.message.answer(f"🎼 Добавлено треков в очередь: {count}")
 
     @router.message(Command("play"))
     async def play_cmd(message: Message):
