@@ -30,14 +30,24 @@ rollback() {
   trap - EXIT
   echo "ROLLBACK: restoring previous Roften Wave service" >&2
   if [[ "$switched_image" == 1 ]]; then
+    # Never send raw application logs to public GitHub Actions: they may contain
+    # user data or third-party SDK diagnostics. Keep them on the private VPS.
+    if docker container inspect roften-wave >/dev/null 2>&1; then
+      diagnostic_file="$target/.backups/deploy-failure-${short_sha:-unknown}.log"
+      {
+        docker inspect -f '{{json .State}}' roften-wave
+        docker logs --tail=160 roften-wave 2>&1
+      } > "$diagnostic_file" 2>&1
+      chmod 600 "$diagnostic_file"
+      echo "Private startup diagnostics saved to $diagnostic_file" >&2
+    fi
     docker compose -p "$project" stop wave >&2
-    if [[ -n "$snapshot_file" && -s "$snapshot_file" && -n "$previous_image" ]]; then
-      docker run --rm --network none --user 0:0 --security-opt no-new-privileges \
-        --mount "type=volume,source=$volume,target=/data" \
-        --mount "type=bind,source=$target/.backups,target=/backups,readonly" \
-        --mount "type=bind,source=$target/deploy,target=/scripts,readonly" \
-        --entrypoint python "$previous_image" /scripts/sqlite_snapshot.py \
-        restore "/backups/$(basename "$snapshot_file")" /data/wave.sqlite3 10001 10001 >&2
+    # Preserve the consistent SQLite backup for manual recovery, but never
+    # automatically overwrite the active volume on code rollback: doing so
+    # discards writes made during a partially successful rollout. Schema
+    # changes must remain backward compatible until a deliberate migration.
+    if [[ -n "$snapshot_file" && -s "$snapshot_file" ]]; then
+      echo "SQLite backup retained at $snapshot_file (not automatically restored)" >&2
     fi
     if [[ -n "$previous_image" ]]; then
       docker image tag "$previous_image" "$production_image"
