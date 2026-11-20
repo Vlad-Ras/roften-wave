@@ -198,7 +198,13 @@ class Player:
                 if self.mode != 'manual' and self.autos:
                     next_item = self.autos[0]
             if next_item is None:
-                self._schedule_auto_refill()
+                with self.lock:
+                    auto_mode = self.mode != "manual"
+                if auto_mode:
+                    # The future's callback will stage the next item when
+                    # ready. Do not race it by clearing the staging slot here.
+                    self._schedule_auto_refill()
+                    return
         self.staging.stage(str(next_item['id']) if next_item and next_item.get('id') else None)
 
     def _submit_metadata(self, track: dict[str, Any]) -> None:
@@ -285,7 +291,7 @@ class Player:
             if pending is not None and not pending.done():
                 try:
                     pending.result(timeout=8)
-                except (concurrent.futures.TimeoutError, Exception):
+                except Exception:
                     # Fall back to normal retrieval; the bounded recovery gate
                     # still controls repeated Yandex failures.
                     pass
