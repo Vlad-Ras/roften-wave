@@ -7,7 +7,7 @@ import time
 import pytest
 
 from roften_wave.config import load_config
-from roften_wave.stream import make_sink, silence
+from roften_wave.stream import make_sink, silence, classify_stream_error, StreamError
 
 
 def test_ffmpeg_rejects_empty_mount():
@@ -52,3 +52,20 @@ def test_ffmpeg_publishes_mp3_to_fake_icecast():
     reader.join(timeout=10)
     assert output['request'].startswith('PUT /live HTTP/')
     assert output['audio_bytes'] > 10000
+
+
+def test_ffmpeg_stream_errors_are_classified_without_credentials():
+    secret = b"my-private-password"
+    cases = {
+        b"HTTP error 401 Unauthorized": "DJ authentication rejected (401)",
+        b"HTTP error 403 Forbidden": "DJ publishing forbidden (403)",
+        b"HTTP error 404 Not Found": "DJ mount not found (404)",
+        b"Connection refused": "DJ TCP connection refused",
+        b"Broken pipe": "DJ stream connection dropped",
+        b"Unexpected codec": "FFmpeg/Icecast stream stopped",
+    }
+    for message, expected in cases.items():
+        label = classify_stream_error(message + b" " + secret)
+        assert label == expected
+        assert secret.decode() not in label
+    assert issubclass(StreamError, RuntimeError)
