@@ -77,3 +77,23 @@ def test_diagnostics_requires_auth_and_redacts_secrets(client, monkeypatch):
     assert checks['storage']['ok'] is True
     assert checks['yandex_auth']['ok'] is True
     assert 'dummy' not in result.text
+
+
+def test_queue_shuffle_dedupe_and_statistics_permissions(client, monkeypatch):
+    c, store, source, player = client
+    assert c.post("/api/queue/shuffle").status_code == 401
+    assert c.post("/api/queue/dedupe").status_code == 401
+    assert c.get("/api/statistics").status_code == 401
+    headers = login(client)
+    assert c.post("/api/queue/shuffle").status_code == 403
+    for track_id in (1, 2, 1, 3):
+        store.add({"id": str(track_id), "title": "Song", "artist": "Test"})
+    r = c.post("/api/queue/dedupe", headers=headers)
+    assert r.status_code == 200
+    assert r.json()["removed"] == 1
+    r = c.post("/api/queue/shuffle", headers=headers)
+    assert r.status_code == 200
+    assert r.json()["shuffled"] == 3
+    store.record_audio_result(seconds=61, finished=True)
+    assert c.get("/api/statistics").json()["audio_seconds"] == 61
+    assert c.get("/api/state").json()["statistics"]["finished_tracks"] == 1
