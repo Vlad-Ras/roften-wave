@@ -300,7 +300,54 @@ async def launch_bot(config: Config, source: YandexSource, store: Store, player:
     bot = Bot(config.telegram_token)
     dp = Dispatcher()
     dp.include_router(router)
+
+    async def monitor_air() -> None:
+        """Poll real station state only when Wave should be broadcasting.
+
+        Three consecutive missed checks trigger one alert; a recovered stream
+        triggers one resolution message. Intentional pause/idle resets the latch.
+        """
+        guard = AirAlertState(threshold=3)
+        while True:
+            await asyncio.sleep(20)
+            state = player.snapshot()
+            expected = not state["paused"] and (
+                state["current"] is not None or bool(state["queue"]) or state["mode"] != "manual"
+            )
+            if not expected:
+                guard.evaluate(expected=False, healthy=False)
+                continue
+            try:
+                air = await asyncio.to_thread(fetch_air_status, config)
+            except Exception as exc:
+                log.warning("Live DJ monitor read failed: %s", type(exc).__name__)
+                # An API error cannot prove that the stream is down.
+                continue
+            healthy = bool(air["live"] and state["status"] == "playing")
+            event = guard.evaluate(expected=True, healthy=healthy)
+            if event == "lost":
+                message = (
+                    "🚨 Roften Wave: Live DJ отсутствует в AzuraCast. "
+                    f"Локальный статус: {state['status']}. Проверь /status и /air."
+                )
+            elif event == "restored":
+                message = "✅ Roften Wave: Live DJ снова в эфире AzuraCast."
+            else:
+                continue
+            for admin_id in config.telegram_admin_ids:
+                try:
+                    await bot.send_message(admin_id, message)
+                except Exception as exc:
+                    log.warning("Could not send Live DJ alert: %s", type(exc).__name__)
+
+    monitor_task = None
+    if config.azuracast_api_url and config.azuracast_station_id:
+        monitor_task = asyncio.create_task(monitor_air(), name="wave-air-monitor")
     try:
         await dp.start_polling(bot, handle_signals=False, allowed_updates=dp.resolve_used_update_types())
     finally:
+        if monitor_task is not None:
+            monitor_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await monitor_task
         await bot.session.close()
