@@ -9,13 +9,17 @@ Standalone radio manager for **Yandex Music → FFmpeg Live DJ → AzuraCast →
 - Previous, next, pause, resume; pause/idle releases DJ connection so AzuraCast AutoDJ can take over.
 - Own Yandex playlists: import up to 250 items into queue.
 - Mobile-first web dashboard with password authentication, signed HttpOnly cookies and CSRF tokens.
-- Telegram bot (`/search`, `/play`, `/next`, `/prev`, `/pause`, `/resume`, `/wave`, `/likes`, `/manual`, `/status`, `/queue`, `/air`, `/history`, `/diagnose`) with inline control buttons; only allowlisted Telegram user IDs.
+- Telegram bot (`/search`, `/play`, `/next`, `/prev`, `/pause`, `/resume`, `/wave`, `/likes`, `/manual`, `/status`, `/queue`, `/air`, `/history`, `/now`, `/playlists`, `/shuffle`, `/dedupe`, `/stats`, `/diagnose`) with inline control buttons; only allowlisted Telegram user IDs.
 - Editable public web and radio URLs. Telegram uses long polling without a webhook; domain changes do not affect it.
 - Docker Compose + external Nginx. Queue/settings/history in SQLite volume; tracks in short-lived temporary files.
 - v0.1.1: crash recovery of claimed queue items; cleanup of interrupted downloads; connection diagnostics; SQLite auto-migration.
 - v0.1.2: one-next-song predictive prefetch (reuses finished audio without downloading twice); optional per-song metadata synchronization with AzuraCast; queue-change-aware staging; prefetch/metadata status in web panel; cleanup of old crash leftovers.
 - v0.1.3: bounded reconnect attempts (initial + two retries), exponential per-track retry delays, a rolling-window circuit breaker, fallback to AutoDJ while recovering, a resilient manual queue, automatic-track skip after repeated failures and recovery diagnostics in web/Telegram.
 - New operator controls: `/air` reads AzuraCast's actual station now-playing, Live DJ state and listener counts (rather than the local Wave playback state); `/history` shows the ten latest songs recorded in the local SQLite history. Both have inline keyboard buttons and require the existing Telegram admin allowlist.
+- Operator update: Telegram `/now` (cover/progress), `/playlists` (owned playlists and queue import), `/shuffle`, `/dedupe`, `/stats` plus inline controls. Web queue shuffle/dedupe buttons and measured output statistics. No Minecraft song requests or listener controls.
+- Playback improvements: proactive asynchronous refill of Wave/liked-track batches and rolling measurements of server-side gap between completed tracks. These are optimizations, not gapless audio guarantees.
+- Monitoring: optional admin notifications after three consecutive 20-second checks that detect missing Live DJ while Wave should play, plus a restoration notice. Only runs when the AzuraCast API URL and station ID are configured; intentional pauses and idle manual queue don't alert.
+- Security: FFmpeg failures are mapped to fixed diagnostic categories, avoiding raw URLs and DJ passwords in app logs; rotate any DJ password that appeared in previously shared Liquidsoap logs.
 
 ## Prerequisites
 
@@ -51,7 +55,7 @@ The app is accessible *only* on the host's loopback address `127.0.0.1:8787`. Co
 
 ## Web API
 
-`/health` is public liveness only. Other `/api/*` endpoints require login and a CSRF header for mutations. `/api/login` returns the `csrf` token and sets a signed, 12-hour, HttpOnly, SameSite=Strict cookie. `/api/state`, `/api/search?q=...`, `/api/queue`, `/api/queue/order`, `/api/mode`, `/api/next`, `/api/previous`, `/api/pause`, `/api/resume`, `/api/playlists`, `/api/settings` and `/api/diagnostics` are used by the built-in UI. Diagnostics verifies local dependencies, performs a TCP handshake to the DJ port, and validates Yandex account access; it does not publish a stream or verify the DJ password.
+`/health` is public liveness only. Other `/api/*` endpoints require login and a CSRF header for mutations. `/api/login` returns the `csrf` token and sets a signed, 12-hour, HttpOnly, SameSite=Strict cookie. `/api/state`, `/api/search?q=...`, `/api/queue`, `/api/queue/order`, `/api/queue/shuffle`, `/api/queue/dedupe`, `/api/statistics`, `/api/mode`, `/api/next`, `/api/previous`, `/api/pause`, `/api/resume`, `/api/playlists`, `/api/settings` and `/api/diagnostics` are used by the built-in UI. Diagnostics verifies local dependencies, performs a TCP handshake to the DJ port, and validates Yandex account access; it does not publish a stream or verify the DJ password.
 
 ## Safety and recovery
 
