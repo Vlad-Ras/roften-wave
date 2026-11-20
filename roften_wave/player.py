@@ -198,6 +198,7 @@ class Player:
                 "error": self.error,
                 "queue": self.store.queue(),
                 "history": self.store.history()[:10],
+                "statistics": self.store.stats(),
                 "prefetch": self.staging.stats(),
                 "metadata": {"status": self.metadata_state, "error": self.metadata_error},
                 "recovery": {
@@ -288,6 +289,7 @@ class Player:
         queue_id = track.pop("_queue_id", None)
         preserve_claim = False
         playback_failed = False
+        finished_track = False
         job = None
         future: concurrent.futures.Future | None = None
         with self.lock:
@@ -354,6 +356,7 @@ class Player:
                 # An empty or corrupt decoder output is a failure, not a played song.
                 if first_frame or decoder.wait(timeout=3) != 0:
                     raise RuntimeError("Audio decoder produced no complete track")
+                finished_track = True
                 with self.lock:
                     self.gate.succeeded()
                     self.retry_at = 0.0
@@ -395,6 +398,19 @@ class Player:
                         self.status = "recovering"
             self._close_sink()
         finally:
+            # Count only actual decoded PCM delivered to the broadcaster.
+            # This is one SQLite write per attempt, not an update per audio frame.
+            delivered = max(0.0, self.elapsed - offset)
+            if delivered > 0 or playback_failed or finished_track:
+                try:
+                    self.store.record_audio_result(
+                        seconds=delivered,
+                        finished=finished_track,
+                        failed=playback_failed,
+                        interrupted=not playback_failed and not finished_track,
+                    )
+                except Exception:
+                    log.exception("Could not persist audio output statistics")
             if decoder:
                 if decoder.poll() is None:
                     decoder.terminate()
