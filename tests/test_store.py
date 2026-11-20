@@ -36,3 +36,40 @@ def test_empty(tmp_path):
     assert s.queue()==[]
     assert s.get("missing","fallback")=="fallback"
     s.close()
+
+
+def test_shuffle_dedupe_and_inflight_protection(tmp_path):
+    s = Store(tmp_path / "queue.sqlite3")
+    s.add(track(1)); s.add(track(2)); s.add(track(1)); s.add(track(3))
+    claim = s.claim()
+    assert claim[1]["id"] == "1"
+    assert s.dedupe() == 0  # the queued "1" isn't a duplicate of claimed item
+    s.add(track(2))
+    assert s.dedupe() == 1
+    ids = {item["queue_id"] for item in s.queue()}
+    assert s.shuffle() == 3
+    assert {item["queue_id"] for item in s.queue()} == ids
+    assert s.remove(claim[0]) is False
+    s.release(claim[0])
+    assert s.dedupe() == 1
+    assert len(s.queue()) == 3
+    s.close()
+
+
+def test_station_stats_persist_and_aggregate(tmp_path):
+    path = tmp_path / "statistics.sqlite3"
+    s = Store(path)
+    assert s.stats()["finished_tracks"] == 0
+    s.record_audio_result(seconds=90.25, finished=True)
+    s.record_audio_result(seconds=10, failed=True)
+    s.record_audio_result(seconds=5, interrupted=True)
+    result = s.stats()
+    assert result["audio_seconds"] == 105.2
+    assert result["finished_tracks"] == 1
+    assert result["failed_tracks"] == 1
+    assert result["interruptions"] == 1
+    assert len(result["days"]) == 1
+    s.close()
+    reopened = Store(path)
+    assert reopened.stats()["finished_tracks"] == 1
+    reopened.close()
