@@ -200,6 +200,25 @@ async def enqueue(body: TrackPayload, _: str = Depends(identity)):
     return {"queue_id": item_id, "track": info}
 
 
+@app.post("/api/queue/shuffle")
+def shuffle_queue(_: str = Depends(identity)):
+    count = store.shuffle()
+    player.queue_updated()
+    return {"ok": True, "shuffled": count}
+
+
+@app.post("/api/queue/dedupe")
+def dedupe_queue(_: str = Depends(identity)):
+    removed = store.dedupe()
+    player.queue_updated()
+    return {"ok": True, "removed": removed}
+
+
+@app.get("/api/statistics")
+def statistics(_: str = Depends(identity)):
+    return store.stats()
+
+
 @app.delete("/api/queue/{item_id}")
 def remove(item_id: int, _: str = Depends(identity)):
     if not store.remove(item_id):
