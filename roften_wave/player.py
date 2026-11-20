@@ -33,6 +33,11 @@ class Player:
         self.error = ""
         self.status = "idle"
         self.autos: deque[dict[str, Any]] = deque()
+        self.auto_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="wave-autofill")
+        self.auto_pending: concurrent.futures.Future | None = None
+        self.auto_generation = 0
+        self.last_track_end_at: float | None = None
+        self.handoff_gaps_ms: deque[int] = deque(maxlen=20)
         self.sink: Sink | None = None
         self.worker: threading.Thread | None = None
         self.staging = OneTrackPrefetch(config.data_dir, source.download)
@@ -63,6 +68,7 @@ class Player:
             self.worker.join(timeout=5)
         self._close_sink()
         self.staging.close()
+        self.auto_pool.shutdown(wait=False, cancel_futures=True)
         self.metadata_pool.shutdown(wait=False, cancel_futures=True)
 
     def _discard_resume_track(self) -> None:
@@ -84,6 +90,9 @@ class Player:
             self.retry_at = 0.0
             self.metadata_generation += 1
             self.autos.clear()
+            self.auto_generation += 1
+            self.auto_pending = None
+            self.last_track_end_at = None
             self._discard_resume_track()
             self.paused = False
             self.store.set("mode", mode)
@@ -117,6 +126,7 @@ class Player:
         with self.lock:
             self.paused = True
             self.retry_at = 0.0
+            self.last_track_end_at = None
             self.metadata_generation += 1
             self.interrupt.set()
             self.wake.set()
@@ -148,12 +158,47 @@ class Player:
             self._stage_next()
         self.wake.set()
 
+    def _schedule_auto_refill(self) -> None:
+        """Fetch the next Wave/likes batch before the current last song ends."""
+        with self.lock:
+            if self.shutdown.is_set() or self.mode == "manual" or self.autos:
+                return
+            if self.auto_pending is not None and not self.auto_pending.done():
+                return
+            mode = self.mode
+            generation = self.auto_generation
+            try:
+                task = self.auto_pool.submit(self.source.wave if mode == "wave" else self.source.likes)
+            except RuntimeError:
+                return
+            self.auto_pending = task
+
+        def completed(future: concurrent.futures.Future) -> None:
+            try:
+                batch = future.result()
+            except concurrent.futures.CancelledError:
+                return
+            except Exception as exc:
+                log.warning("Auto playlist prefetch failed: %s", type(exc).__name__)
+                return
+            with self.lock:
+                if self.shutdown.is_set() or self.auto_generation != generation or self.mode != mode:
+                    return
+                self.autos.extend(batch)
+            if batch:
+                self._stage_next()
+            self.wake.set()
+
+        task.add_done_callback(completed)
+
     def _stage_next(self) -> None:
         next_item = self.store.peek()
         if next_item is None:
             with self.lock:
                 if self.mode != 'manual' and self.autos:
                     next_item = self.autos[0]
+            if next_item is None:
+                self._schedule_auto_refill()
         self.staging.stage(str(next_item['id']) if next_item and next_item.get('id') else None)
 
     def _submit_metadata(self, track: dict[str, Any]) -> None:
@@ -199,6 +244,10 @@ class Player:
                 "queue": self.store.queue(),
                 "history": self.store.history()[:10],
                 "statistics": self.store.stats(),
+                "handoff": {"last_ms": self.handoff_gaps_ms[-1] if self.handoff_gaps_ms else None,
+                            "average_ms": round(sum(self.handoff_gaps_ms) / len(self.handoff_gaps_ms))
+                            if self.handoff_gaps_ms else None,
+                            "samples": len(self.handoff_gaps_ms)},
                 "prefetch": self.staging.stats(),
                 "metadata": {"status": self.metadata_state, "error": self.metadata_error},
                 "recovery": {
@@ -231,6 +280,20 @@ class Player:
         if self.mode == "manual":
             return None
         if not self.autos:
+            with self.lock:
+                pending = self.auto_pending
+            if pending is not None and not pending.done():
+                try:
+                    pending.result(timeout=8)
+                except (concurrent.futures.TimeoutError, Exception):
+                    # Fall back to normal retrieval; the bounded recovery gate
+                    # still controls repeated Yandex failures.
+                    pass
+            with self.lock:
+                ready = bool(self.autos)
+            if ready:
+                with self.lock:
+                    return self.autos.popleft()
             try:
                 batch = self.source.wave() if self.mode == "wave" else self.source.likes()
                 self.autos.extend(batch)
@@ -274,6 +337,7 @@ class Player:
             if track is None:
                 self._close_sink()
                 with self.lock:
+                    self.last_track_end_at = None
                     self.current = None
                     self.status = "recovering" if self.error else "idle"
                 self.wake.wait(timeout=2)
@@ -346,6 +410,12 @@ class Player:
                 sink.write(pcm)
                 if first_frame:
                     first_frame = False
+                    with self.lock:
+                        if self.last_track_end_at is not None:
+                            gap_ms = round((time.monotonic() - self.last_track_end_at) * 1000)
+                            if 0 <= gap_ms <= 30000:
+                                self.handoff_gaps_ms.append(gap_ms)
+                        self.last_track_end_at = None
                     if offset < 0.01:
                         self.store.record(track)
                     self._submit_metadata(track)
@@ -358,6 +428,7 @@ class Player:
                     raise RuntimeError("Audio decoder produced no complete track")
                 finished_track = True
                 with self.lock:
+                    self.last_track_end_at = time.monotonic()
                     self.gate.succeeded()
                     self.retry_at = 0.0
             with self.lock:
