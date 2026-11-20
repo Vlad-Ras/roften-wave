@@ -9,12 +9,13 @@ Standalone radio manager for **Yandex Music → FFmpeg Live DJ → AzuraCast →
 - Previous, next, pause, resume; pause/idle releases DJ connection so AzuraCast AutoDJ can take over.
 - Own Yandex playlists: import up to 250 items into queue.
 - Mobile-first web dashboard with password authentication, signed HttpOnly cookies and CSRF tokens.
-- Telegram bot (`/search`, `/play`, `/next`, `/prev`, `/pause`, `/resume`, `/wave`, `/likes`, `/manual`, `/status`, `/queue`, `/diagnose`) with inline control buttons; only allowlisted Telegram user IDs.
+- Telegram bot (`/search`, `/play`, `/next`, `/prev`, `/pause`, `/resume`, `/wave`, `/likes`, `/manual`, `/status`, `/queue`, `/air`, `/history`, `/diagnose`) with inline control buttons; only allowlisted Telegram user IDs.
 - Editable public web and radio URLs. Telegram uses long polling without a webhook; domain changes do not affect it.
 - Docker Compose + external Nginx. Queue/settings/history in SQLite volume; tracks in short-lived temporary files.
 - v0.1.1: crash recovery of claimed queue items; cleanup of interrupted downloads; connection diagnostics; SQLite auto-migration.
 - v0.1.2: one-next-song predictive prefetch (reuses finished audio without downloading twice); optional per-song metadata synchronization with AzuraCast; queue-change-aware staging; prefetch/metadata status in web panel; cleanup of old crash leftovers.
 - v0.1.3: bounded reconnect attempts (initial + two retries), exponential per-track retry delays, a rolling-window circuit breaker, fallback to AutoDJ while recovering, a resilient manual queue, automatic-track skip after repeated failures and recovery diagnostics in web/Telegram.
+- New operator controls: `/air` reads AzuraCast's actual station now-playing, Live DJ state and listener counts (rather than the local Wave playback state); `/history` shows the ten latest songs recorded in the local SQLite history. Both have inline keyboard buttons and require the existing Telegram admin allowlist.
 
 ## Prerequisites
 
@@ -71,6 +72,7 @@ The app is accessible *only* on the host's loopback address `127.0.0.1:8787`. Co
 - The recovery state is process-local; after a crash the SQLite queue is recovered, but the current playback offset and in-memory backoff counters are reset. Live credentials and subscriptions are not exercised in local tests.
 - **Auth limitations:** a cached API client may require reconnecting after account changes; the on-demand diagnostics calls the Yandex account-status API. No live account was available to validate this release.
 - **Network limitations:** a successful TCP connection to the DJ port does not validate DJ credentials, mount or codec. Test an actual stream before using the station for Minecraft.
+- **Actual air status:** `/air` performs a read-only GET against `{AZURACAST_API_URL}/api/nowplaying/{AZURACAST_STATION_ID}`. It needs those two environment variables, not the AzuraCast API key. It shows source (Live DJ vs AutoDJ), public Now Playing title and listener count, and returns an unavailable message if the AzuraCast endpoint cannot be reached. It never opens a new DJ source or reveals tokens.
 
 ## Upgrade from 0.1.0 / 0.1.1
 
