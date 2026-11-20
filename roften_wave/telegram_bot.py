@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import contextlib
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, CommandStart
@@ -12,6 +13,7 @@ from .db import Store
 from .diagnostics import check_local, check_yandex
 from .player import Player
 from .station_status import fetch_air_status, format_air_status
+from .air_monitor import AirAlertState
 from .yandex import TRACK_ID, YandexSource
 
 log = logging.getLogger(__name__)
@@ -35,6 +37,50 @@ async def launch_bot(config: Config, source: YandexSource, store: Store, player:
             f"{i}. {fmt(track)}" for i, track in enumerate(tracks, 1)
         )
 
+    def now_message() -> str:
+        state = player.snapshot()
+        track = state["current"]
+        if track is None:
+            return "🎵 Сейчас ничего не воспроизводится в Roften Wave."
+        elapsed = max(0, int(state["elapsed"]))
+        duration = max(0, int(track.get("duration") or 0))
+        def time_text(seconds: int) -> str:
+            return f"{seconds // 60}:{seconds % 60:02d}"
+        percentage = min(100, int(elapsed * 100 / duration)) if duration else 0
+        filled = percentage // 10
+        progress = "━" * filled + "─" * (10 - filled)
+        return (
+            f"🎵 {fmt(track)}\n"
+            f"{time_text(elapsed)} / {time_text(duration)} · {percentage}%\n"
+            f"{progress}\n"
+            f"Статус: {state['status']} · Режим: {state['mode']}"
+        )
+
+    def statistics_message() -> str:
+        s = store.stats()
+        seconds = int(s["audio_seconds"])
+        return (
+            "📊 Roften Wave — статистика\n"
+            f"Передано аудио: {seconds // 3600} ч {seconds % 3600 // 60} мин\n"
+            f"Завершённых треков: {s['finished_tracks']}\n"
+            f"Ошибок треков: {s['failed_tracks']}\n"
+            f"Прерываний: {s['interruptions']}\n"
+            "Статистика считает фактически переданный аудиосигнал, не прослушивания."
+        )
+
+    async def send_now(message: Message) -> None:
+        state = player.snapshot()
+        track = state["current"]
+        caption = now_message()
+        cover = track.get("cover") if track else ""
+        if isinstance(cover, str) and cover.startswith("https://") and len(cover) < 400:
+            try:
+                await message.answer_photo(photo=cover, caption=caption)
+                return
+            except Exception as exc:
+                log.warning("Telegram cover not available: %s", type(exc).__name__)
+        await message.answer(caption)
+
     async def air_message() -> str:
         if not config.azuracast_api_url or not config.azuracast_station_id:
             return "📡 Не настроены AZURACAST_API_URL и AZURACAST_STATION_ID"
@@ -57,6 +103,10 @@ async def launch_bot(config: Config, source: YandexSource, store: Store, player:
              InlineKeyboardButton(text="📻 Статус", callback_data="control:status")],
             [InlineKeyboardButton(text="📡 Эфир", callback_data="control:air"),
              InlineKeyboardButton(text="🕘 История", callback_data="control:history")],
+            [InlineKeyboardButton(text="🎵 Сейчас", callback_data="control:now"),
+             InlineKeyboardButton(text="📊 Статистика", callback_data="control:stats")],
+            [InlineKeyboardButton(text="🔀 Перемешать", callback_data="control:shuffle"),
+             InlineKeyboardButton(text="🧹 Убрать повторы", callback_data="control:dedupe")],
         ])
         await message.answer(
             "🎵 Roften Wave — пульт радио\n"
@@ -65,6 +115,9 @@ async def launch_bot(config: Config, source: YandexSource, store: Store, player:
             "/manual — ручная очередь\n"
             "/air — реальный эфир и слушатели AzuraCast\n"
             "/history — последние 10 песен\n"
+            "/now — обложка, прогресс и длительность\n"
+            "/shuffle — перемешать очередь · /dedupe — убрать повторы\n"
+            "/stats — статистика аудио\n"
             "/diagnose — диагностика подключений",
             reply_markup=keyboard,
         )
@@ -90,6 +143,21 @@ async def launch_bot(config: Config, source: YandexSource, store: Store, player:
         elif action == "queue":
             tracks = store.queue()
             msg = "\n".join(f"{i+1}. {fmt(t)}" for i, t in enumerate(tracks[:15])) or "Очередь пуста"
+        elif action == "now":
+            await callback.answer("Готово")
+            if callback.message:
+                await send_now(callback.message)
+            return
+        elif action == "stats":
+            msg = statistics_message()
+        elif action == "shuffle":
+            count = store.shuffle()
+            player.queue_updated()
+            msg = f"🔀 Перемешано записей: {count}"
+        elif action == "dedupe":
+            removed = store.dedupe()
+            player.queue_updated()
+            msg = f"🧹 Удалено повторов: {removed}"
         elif action == "air":
             msg = await air_message()
         elif action == "history":
@@ -121,6 +189,26 @@ async def launch_bot(config: Config, source: YandexSource, store: Store, player:
         retry = (f"\n🔄 Ожидание: {recovery['retry_in_seconds']:.0f} с "
                  f"({'защита от частых подключений' if recovery['circuit_open'] else 'повтор трека'})") if recovery['retry_in_seconds'] > 0 else ''
         await message.answer(f"📻 {fmt(snapshot['current'])}\nРежим: {snapshot['mode']}\nСтатус: {snapshot['status']}\nОчередь: {len(snapshot['queue'])}\nОшибка: {snapshot['error'] or 'нет'}{retry}")
+
+    @router.message(Command("now"))
+    async def now_cmd(message: Message):
+        await send_now(message)
+
+    @router.message(Command("stats"))
+    async def stats_cmd(message: Message):
+        await message.answer(statistics_message())
+
+    @router.message(Command("shuffle"))
+    async def shuffle_cmd(message: Message):
+        count = store.shuffle()
+        player.queue_updated()
+        await message.answer(f"🔀 Перемешано записей: {count}")
+
+    @router.message(Command("dedupe"))
+    async def dedupe_cmd(message: Message):
+        removed = store.dedupe()
+        player.queue_updated()
+        await message.answer(f"🧹 Удалено повторов: {removed}")
 
     @router.message(Command("air"))
     async def air_cmd(message: Message):
