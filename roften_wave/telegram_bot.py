@@ -11,6 +11,7 @@ from .config import Config
 from .db import Store
 from .diagnostics import check_local, check_yandex
 from .player import Player
+from .station_status import fetch_air_status, format_air_status
 from .yandex import TRACK_ID, YandexSource
 
 log = logging.getLogger(__name__)
@@ -26,6 +27,24 @@ async def launch_bot(config: Config, source: YandexSource, store: Store, player:
             return "Ничего не играет"
         return f"{track['artist']} — {track['title']}"
 
+    def history_message() -> str:
+        tracks = store.history()[:10]
+        if not tracks:
+            return "🕘 История воспроизведения пока пуста"
+        return "🕘 Недавно играли:\n" + "\n".join(
+            f"{i}. {fmt(track)}" for i, track in enumerate(tracks, 1)
+        )
+
+    async def air_message() -> str:
+        if not config.azuracast_api_url or not config.azuracast_station_id:
+            return "📡 Не настроены AZURACAST_API_URL и AZURACAST_STATION_ID"
+        try:
+            status = await asyncio.to_thread(fetch_air_status, config)
+        except Exception as exc:
+            log.warning("Cannot read AzuraCast air status: %s", type(exc).__name__)
+            return "📡 Не удалось прочитать текущий эфир AzuraCast. Попробуй позже."
+        return format_air_status(status)
+
     @router.message(CommandStart())
     async def start(message: Message):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -36,12 +55,16 @@ async def launch_bot(config: Config, source: YandexSource, store: Store, player:
              InlineKeyboardButton(text="♥ Избранное", callback_data="control:likes")],
             [InlineKeyboardButton(text="📋 Очередь", callback_data="control:queue"),
              InlineKeyboardButton(text="📻 Статус", callback_data="control:status")],
+            [InlineKeyboardButton(text="📡 Эфир", callback_data="control:air"),
+             InlineKeyboardButton(text="🕘 История", callback_data="control:history")],
         ])
         await message.answer(
             "🎵 Roften Wave — пульт радио\n"
             "/search запрос — поиск и выбор песни\n"
             "/play ID — играть сейчас\n"
             "/manual — ручная очередь\n"
+            "/air — реальный эфир и слушатели AzuraCast\n"
+            "/history — последние 10 песен\n"
             "/diagnose — диагностика подключений",
             reply_markup=keyboard,
         )
@@ -67,6 +90,10 @@ async def launch_bot(config: Config, source: YandexSource, store: Store, player:
         elif action == "queue":
             tracks = store.queue()
             msg = "\n".join(f"{i+1}. {fmt(t)}" for i, t in enumerate(tracks[:15])) or "Очередь пуста"
+        elif action == "air":
+            msg = await air_message()
+        elif action == "history":
+            msg = history_message()
         elif action == "status":
             state = player.snapshot()
             recovery = state['recovery']
@@ -94,6 +121,14 @@ async def launch_bot(config: Config, source: YandexSource, store: Store, player:
         retry = (f"\n🔄 Ожидание: {recovery['retry_in_seconds']:.0f} с "
                  f"({'защита от частых подключений' if recovery['circuit_open'] else 'повтор трека'})") if recovery['retry_in_seconds'] > 0 else ''
         await message.answer(f"📻 {fmt(snapshot['current'])}\nРежим: {snapshot['mode']}\nСтатус: {snapshot['status']}\nОчередь: {len(snapshot['queue'])}\nОшибка: {snapshot['error'] or 'нет'}{retry}")
+
+    @router.message(Command("air"))
+    async def air_cmd(message: Message):
+        await message.answer(await air_message())
+
+    @router.message(Command("history"))
+    async def history_cmd(message: Message):
+        await message.answer(history_message())
 
     @router.message(Command("queue"))
     async def queue(message: Message):
