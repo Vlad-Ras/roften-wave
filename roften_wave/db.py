@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import random
 import threading
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,15 @@ class Store:
             columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(queue)")}
             if "inflight" not in columns:
                 self.connection.execute("ALTER TABLE queue ADD COLUMN inflight INTEGER NOT NULL DEFAULT 0")
+            self.connection.execute("""
+                CREATE TABLE IF NOT EXISTS daily_stats (
+                    day TEXT PRIMARY KEY,
+                    audio_seconds REAL NOT NULL DEFAULT 0,
+                    finished_tracks INTEGER NOT NULL DEFAULT 0,
+                    failed_tracks INTEGER NOT NULL DEFAULT 0,
+                    interruptions INTEGER NOT NULL DEFAULT 0
+                )
+            """)
             # Recover a track that was playing when the process stopped.
             self.connection.execute("UPDATE queue SET inflight=0 WHERE inflight<>0")
 
@@ -125,6 +135,97 @@ class Store:
             except Exception:
                 self.connection.execute("ROLLBACK")
                 raise
+
+    def shuffle(self) -> int:
+        """Shuffle only waiting tracks, never an in-flight item. Atomic."""
+        with self.lock:
+            rows = self.connection.execute(
+                "SELECT id FROM queue WHERE inflight=0 ORDER BY priority,id"
+            ).fetchall()
+            ids = [int(row["id"]) for row in rows]
+            random.SystemRandom().shuffle(ids)
+            if len(ids) < 2:
+                return len(ids)
+            self.connection.execute("BEGIN IMMEDIATE")
+            try:
+                for priority, item_id in enumerate(ids):
+                    self.connection.execute(
+                        "UPDATE queue SET priority=? WHERE id=? AND inflight=0",
+                        (priority, item_id),
+                    )
+                self.connection.execute("COMMIT")
+            except Exception:
+                self.connection.execute("ROLLBACK")
+                raise
+            return len(ids)
+
+    def dedupe(self) -> int:
+        """Remove duplicate waiting track IDs; keep the earliest request."""
+        with self.lock:
+            rows = self.connection.execute(
+                "SELECT id,track FROM queue WHERE inflight=0 ORDER BY priority,id"
+            ).fetchall()
+            seen: set[str] = set()
+            removed: list[int] = []
+            for row in rows:
+                key = str(json.loads(row["track"]).get("id", ""))
+                if key and key in seen:
+                    removed.append(int(row["id"]))
+                else:
+                    if key:
+                        seen.add(key)
+            if not removed:
+                return 0
+            self.connection.execute("BEGIN IMMEDIATE")
+            try:
+                self.connection.executemany(
+                    "DELETE FROM queue WHERE id=? AND inflight=0",
+                    [(item_id,) for item_id in removed],
+                )
+                self.connection.execute("COMMIT")
+            except Exception:
+                self.connection.execute("ROLLBACK")
+                raise
+            return len(removed)
+
+    def record_audio_result(self, *, seconds: float, finished: bool = False,
+                            failed: bool = False, interrupted: bool = False) -> None:
+        """One bounded stats write per track attempt, never per audio frame."""
+        safe_seconds = max(0.0, min(float(seconds), 24 * 60 * 60))
+        with self.lock:
+            self.connection.execute(
+                """INSERT INTO daily_stats(day,audio_seconds,finished_tracks,failed_tracks,interruptions)
+                   VALUES(date('now'),?,?,?,?)
+                   ON CONFLICT(day) DO UPDATE SET
+                     audio_seconds=audio_seconds+excluded.audio_seconds,
+                     finished_tracks=finished_tracks+excluded.finished_tracks,
+                     failed_tracks=failed_tracks+excluded.failed_tracks,
+                     interruptions=interruptions+excluded.interruptions""",
+                (safe_seconds, int(finished), int(failed), int(interrupted)),
+            )
+
+    def stats(self) -> dict[str, object]:
+        """Aggregated station output statistics, independent of listener metrics."""
+        with self.lock:
+            row = self.connection.execute(
+                """SELECT COALESCE(SUM(audio_seconds),0) AS seconds,
+                          COALESCE(SUM(finished_tracks),0) AS finished,
+                          COALESCE(SUM(failed_tracks),0) AS failed,
+                          COALESCE(SUM(interruptions),0) AS interrupted
+                   FROM daily_stats"""
+            ).fetchone()
+            days = self.connection.execute(
+                """SELECT day, ROUND(audio_seconds) AS seconds, finished_tracks AS finished,
+                          failed_tracks AS failed, interruptions AS interrupted
+                   FROM daily_stats ORDER BY day DESC LIMIT 7"""
+            ).fetchall()
+        return {
+            "audio_seconds": round(float(row["seconds"]), 1),
+            "finished_tracks": int(row["finished"]),
+            "failed_tracks": int(row["failed"]),
+            "interruptions": int(row["interrupted"]),
+            "days": [dict(day) for day in days],
+        }
 
     def get(self, key: str, default: str = "") -> str:
         with self.lock:
