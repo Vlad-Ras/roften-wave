@@ -9,7 +9,7 @@ from typing import Any
 
 from .config import Config
 from .db import Store
-from .stream import BYTES_PER_SECOND, Sink, make_decoder, make_sink, silence
+from .stream import BYTES_PER_SECOND, Sink, StreamError, make_decoder, make_sink, silence
 from .prefetch import OneTrackPrefetch, cleanup_job, clean_orphan_audio
 from .metadata import MetadataPublisher
 from .resilience import RecoveryGate, MAX_TRACK_ATTEMPTS, RETRY_DELAYS_SECONDS
@@ -438,12 +438,18 @@ class Player:
                 self.status = "paused" if self.paused else "idle"
         except Exception as exc:
             playback_failed = True
-            if isinstance(exc, (BrokenPipeError, OSError, RuntimeError, ValueError, TimeoutError)):
-                log.error("Track playback error: %s", type(exc).__name__)
+            if isinstance(exc, StreamError):
+                # StreamError only contains fixed labels, never raw FFmpeg output.
+                reason = str(exc)
+                log.error("Track playback error: %s", reason)
+            elif isinstance(exc, (BrokenPipeError, OSError, RuntimeError, ValueError, TimeoutError)):
+                reason = type(exc).__name__
+                log.error("Track playback error: %s", reason)
             else:
+                reason = type(exc).__name__
                 log.exception("Uncaught playback error")
             with self.lock:
-                self.error = f"Playback failed: {type(exc).__name__}"
+                self.error = f"Playback failed: {reason}"
                 self.status = "error"
                 if not self.shutdown.is_set() and not self.interrupt.is_set():
                     now = time.monotonic()
